@@ -1,0 +1,489 @@
+package main
+
+import (
+	"context"
+	"crypto/tls"
+	"flag"
+	"fmt"
+	"net"
+	"net/url"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"sync/atomic"
+	"time"
+
+	"github.com/enetx/g"
+	"github.com/enetx/surf"
+	"github.com/miekg/dns"
+	utls "github.com/refraction-networking/utls"
+	xraytls "github.com/xtls/xray-core/transport/internet/tls"
+)
+
+var extraFingerprints = map[string]*utls.ClientHelloID{
+	"hellofirefox_148": &utls.HelloFirefox_148,
+	"hellochrome_133":  &utls.HelloChrome_133,
+	"hellosafari_26_3": &utls.HelloSafari_26_3,
+}
+
+func getFingerprint(name string) (*utls.ClientHelloID, bool) {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		name = "chrome"
+	}
+
+	if fp := xraytls.GetFingerprint(name); fp != nil {
+		return fp, true
+	}
+
+	if fp := extraFingerprints[name]; fp != nil {
+		return fp, true
+	}
+
+	return nil, false
+}
+
+func listFingerprints() []string {
+	seen := make(map[string]struct{})
+
+	for key, fp := range xraytls.PresetFingerprints {
+		if fp != nil {
+			seen[key] = struct{}{}
+		}
+	}
+	for key := range xraytls.ModernFingerprints {
+		seen[key] = struct{}{}
+	}
+	for key := range xraytls.OtherFingerprints {
+		seen[key] = struct{}{}
+	}
+	for key := range extraFingerprints {
+		seen[key] = struct{}{}
+	}
+
+	out := make([]string, 0, len(seen))
+	for key := range seen {
+		out = append(out, key)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func parseResolve(value string) (host string, port string, ip string, ok bool, err error) {
+	if value == "" {
+		return "", "", "", false, nil
+	}
+	parts := strings.Split(value, ":")
+	if len(parts) != 3 {
+		return "", "", "", false, fmt.Errorf("bad --resolve format %q, expected host:port:ip", value)
+	}
+	if parts[0] == "" || parts[1] == "" || parts[2] == "" {
+		return "", "", "", false, fmt.Errorf("bad --resolve format %q, expected host:port:ip", value)
+	}
+	return parts[0], parts[1], parts[2], true, nil
+}
+
+func startResolveDNS(host string, ip string) (addr string, closeFunc func() error, err error) {
+	fqdn := dns.Fqdn(host)
+	parsedIP := net.ParseIP(ip)
+	if parsedIP == nil {
+		return "", nil, fmt.Errorf("bad resolve IP %q", ip)
+	}
+
+	mux := dns.NewServeMux()
+	mux.HandleFunc(".", func(w dns.ResponseWriter, r *dns.Msg) {
+		msg := new(dns.Msg)
+		msg.SetReply(r)
+		msg.Authoritative = true
+
+		for _, q := range r.Question {
+			if strings.EqualFold(q.Name, fqdn) && q.Qtype == dns.TypeA && parsedIP.To4() != nil {
+				msg.Answer = append(msg.Answer, &dns.A{
+					Hdr: dns.RR_Header{Name: q.Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 1},
+					A:   parsedIP.To4(),
+				})
+			}
+		}
+
+		_ = w.WriteMsg(msg)
+	})
+
+	packetConn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		return "", nil, err
+	}
+
+	server := &dns.Server{PacketConn: packetConn, Handler: mux}
+	go func() { _ = server.ActivateAndServe() }()
+
+	return packetConn.LocalAddr().String(), server.Shutdown, nil
+}
+
+func applyFingerprint(builder *surf.Builder, _ string, fp *utls.ClientHelloID) *surf.Builder {
+	return builder.JA().SetHelloID(*fp)
+}
+
+func isGolangFingerprint(fp *utls.ClientHelloID) bool {
+	return fp != nil && fp.Str() == utls.HelloGolang.Str()
+}
+
+type countingConn struct {
+	net.Conn
+	bytesRead    int64
+	bytesWritten int64
+}
+
+func (c *countingConn) Read(p []byte) (int, error) {
+	n, err := c.Conn.Read(p)
+	if n > 0 {
+		atomic.AddInt64(&c.bytesRead, int64(n))
+	}
+	return n, err
+}
+
+func (c *countingConn) Write(p []byte) (int, error) {
+	n, err := c.Conn.Write(p)
+	if n > 0 {
+		atomic.AddInt64(&c.bytesWritten, int64(n))
+	}
+	return n, err
+}
+
+type tlsProbeResult struct {
+	TCPConnected       bool
+	TCPError           error
+	TLSHandshakeDone   bool
+	TLSError           error
+	BytesWritten       int64
+	BytesRead          int64
+	TLSVersion         uint16
+	CipherSuite        uint16
+	NegotiatedProtocol string
+}
+
+func runTLSProbe(ctx context.Context, fp *utls.ClientHelloID, sni string, dialAddr string, useHTTP2 bool) *tlsProbeResult {
+	result := &tlsProbeResult{}
+
+	tcpConn, err := (&net.Dialer{}).DialContext(ctx, "tcp", dialAddr)
+	if err != nil {
+		result.TCPError = err
+		return result
+	}
+	result.TCPConnected = true
+	defer tcpConn.Close()
+
+	countedConn := &countingConn{Conn: tcpConn}
+
+	nextProtos := []string{"http/1.1"}
+	if useHTTP2 {
+		nextProtos = []string{"h2", "http/1.1"}
+	}
+
+	if isGolangFingerprint(fp) {
+		tlsConn := tls.Client(countedConn, &tls.Config{
+			ServerName: sni,
+			NextProtos: nextProtos,
+		})
+		err = tlsConn.HandshakeContext(ctx)
+		state := tlsConn.ConnectionState()
+		result.TLSVersion = state.Version
+		result.CipherSuite = state.CipherSuite
+		result.NegotiatedProtocol = state.NegotiatedProtocol
+	} else {
+		utlsConn := utls.UClient(countedConn, &utls.Config{
+			ServerName: sni,
+			NextProtos: nextProtos,
+		}, *fp)
+		err = utlsConn.HandshakeContext(ctx)
+		state := utlsConn.ConnectionState()
+		result.TLSVersion = state.Version
+		result.CipherSuite = state.CipherSuite
+		result.NegotiatedProtocol = state.NegotiatedProtocol
+	}
+
+	result.BytesWritten = atomic.LoadInt64(&countedConn.bytesWritten)
+	result.BytesRead = atomic.LoadInt64(&countedConn.bytesRead)
+	result.TLSError = err
+	result.TLSHandshakeDone = err == nil
+	return result
+}
+
+func tlsVersionString(version uint16) string {
+	switch version {
+	case tls.VersionTLS10:
+		return "TLS1.0"
+	case tls.VersionTLS11:
+		return "TLS1.1"
+	case tls.VersionTLS12:
+		return "TLS1.2"
+	case tls.VersionTLS13:
+		return "TLS1.3"
+	default:
+		if version == 0 {
+			return "unknown"
+		}
+		return fmt.Sprintf("0x%04x", version)
+	}
+}
+
+func cipherSuiteString(id uint16) string {
+	if id == 0 {
+		return "unknown"
+	}
+	if name := tls.CipherSuiteName(id); name != "" {
+		return name
+	}
+	return fmt.Sprintf("0x%04x", id)
+}
+
+func printTLSProbe(result *tlsProbeResult) {
+	fmt.Println("* TLS probe:")
+	fmt.Println("*   TCP connected:", result.TCPConnected)
+	if result.TCPError != nil {
+		fmt.Println("  TCP error:", result.TCPError)
+	}
+	fmt.Println("*   ClientHello bytes written:", result.BytesWritten)
+	fmt.Println("*   Server TLS bytes read:", result.BytesRead)
+	fmt.Println("*   TLS handshake done:", result.TLSHandshakeDone)
+	if result.TLSError != nil {
+		fmt.Println("*   TLS error:", result.TLSError)
+	}
+	fmt.Println("*   TLS version:", tlsVersionString(result.TLSVersion))
+	fmt.Println("*   TLS cipher:", cipherSuiteString(result.CipherSuite))
+	if result.NegotiatedProtocol != "" {
+		fmt.Println("*   ALPN:", result.NegotiatedProtocol)
+	} else {
+		fmt.Println("*   ALPN:", "unknown")
+	}
+
+	fmt.Println("* Diagnosis:")
+	switch {
+	case !result.TCPConnected:
+		fmt.Println("*   TCP connect failed before TLS")
+	case result.BytesWritten == 0:
+		fmt.Println("*   TCP connected, but ClientHello was not written")
+	case result.BytesWritten > 0 && result.BytesRead == 0:
+		fmt.Println("*   ClientHello was written, but no TLS bytes came back; likely ClientHello drop, ServerHello drop, or server-side blackhole")
+	case result.BytesRead > 0 && !result.TLSHandshakeDone:
+		fmt.Println("*   server sent TLS bytes, but handshake failed; likely TLS alert, fingerprint rejection, or mangled ServerHello")
+	case result.TLSHandshakeDone:
+		fmt.Println("*   TLS handshake completed; ClientHello and ServerHello path worked")
+	default:
+		fmt.Println("*   inconclusive")
+	}
+}
+
+func usage() {
+	prog := filepath.Base(os.Args[0])
+	out := flag.CommandLine.Output()
+
+	fmt.Fprintf(out, `fpcheck - HTTPS fingerprint checker using surf + uTLS
+
+Usage:
+  %[1]s [options] https://host[:port]/path
+
+Options:
+`, prog)
+
+	flag.PrintDefaults()
+
+	fmt.Fprintf(out, `
+Examples:
+  %[1]s https://example.com/
+  %[1]s -fp firefox https://example.com/
+  %[1]s -fp hellochrome_133 https://example.com/
+  %[1]s -fp randomized https://example.com/
+  %[1]s -http2=false -fp firefox https://example.com/
+  %[1]s -resolve "api.dropplite.com:443:127.0.0.1" https://example.com/
+  %[1]s -request -fp firefox https://example.com/
+
+Resolve:
+  -resolve works like curl --resolve:
+  TCP connects to the supplied IP, but SNI and HTTP host stay from the URL..
+
+Modes:
+  Default mode runs a TLS probe. It opens TCP, sends ClientHello, waits for ServerHello/TLS bytes,
+  and prints handshake diagnostics. It does not send an HTTP request.
+
+  -request mode performs a real HTTP request through surf instead of the TLS-only probe.
+
+Output:
+  * connection/debug metadata and TLS probe diagnostics
+  > outgoing request headers, only with -request
+  < incoming response headers, only with -request
+
+On errors, fpcheck still prints fingerprint, SNI, dial target, and protocol if known.
+`, prog)
+}
+
+func main() {
+	flag.Usage = usage
+
+	fingerprintName := flag.String("fp", "chrome", "fingerprint: chrome, firefox, safari, hellochrome_133, hellofirefox_148, randomized")
+	resolveValue := flag.String("resolve", "", "curl-like DNS override: host:port:ip")
+	useHTTP2 := flag.Bool("http2", true, "offer h2,http/1.1 via ALPN; set false to offer only HTTP/1.1")
+	requestEnabled := flag.Bool("request", false, "perform real HTTP request through surf instead of TLS-only probe")
+	list := flag.Bool("list", false, "list supported fingerprint names")
+	timeout := flag.Duration("timeout", 2*time.Second, "request/probe timeout")
+	flag.Parse()
+
+	if *list {
+		for _, name := range listFingerprints() {
+			fmt.Println(name)
+		}
+		return
+	}
+
+	if flag.NArg() != 1 {
+		usage()
+		os.Exit(2)
+	}
+
+	fp, ok := getFingerprint(*fingerprintName)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "unknown fingerprint %q\n\nknown fingerprints:\n", *fingerprintName)
+		for _, name := range listFingerprints() {
+			fmt.Fprintf(os.Stderr, "  %s\n", name)
+		}
+		os.Exit(2)
+	}
+
+	rawURL := flag.Arg(0)
+	parsedURL, err := url.Parse(rawURL)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	if parsedURL.Scheme != "https" {
+		fmt.Fprintln(os.Stderr, "only https:// URLs are supported")
+		os.Exit(2)
+	}
+
+	urlHost := parsedURL.Hostname()
+	urlPort := parsedURL.Port()
+	if urlPort == "" {
+		urlPort = "443"
+	}
+
+	resolveHost, resolvePort, resolveIP, hasResolve, err := parseResolve(*resolveValue)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	if hasResolve && (resolveHost != urlHost || resolvePort != urlPort) {
+		fmt.Fprintf(os.Stderr, "--resolve %s:%s does not match URL host:port %s:%s\n", resolveHost, resolvePort, urlHost, urlPort)
+		os.Exit(2)
+	}
+
+	baseClient := surf.NewClient()
+	defer baseClient.CloseIdleConnections()
+
+	builder := baseClient.Builder().Timeout(*timeout).NotFollowRedirects()
+	if !isGolangFingerprint(fp) {
+		builder = applyFingerprint(builder, *fingerprintName, fp)
+	}
+
+	if *useHTTP2 {
+		builder = builder.ForceHTTP2()
+	} else {
+		builder = builder.ForceHTTP1()
+	}
+
+	dialAddr := net.JoinHostPort(urlHost, urlPort)
+	if hasResolve {
+		dnsAddr, shutdown, err := startResolveDNS(resolveHost, resolveIP)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		defer shutdown()
+		builder = builder.DNS(g.String(dnsAddr))
+		dialAddr = net.JoinHostPort(resolveIP, resolvePort)
+	}
+
+	client := builder.Build().Unwrap()
+	defer client.CloseIdleConnections()
+
+	printMeta := func(proto string) {
+		fmt.Println("* Fingerprint:", strings.ToLower(strings.TrimSpace(*fingerprintName)))
+		fmt.Println("* uTLS ID:", fp.Str())
+		fmt.Println("* SNI:", urlHost)
+		fmt.Println("* Dial:", dialAddr)
+
+		if proto != "" {
+			fmt.Println("* Proto:", proto)
+		} else {
+			fmt.Println("* Proto:", "unknown")
+		}
+	}
+
+	// TLS-only default mode
+	if !*requestEnabled {
+		probeCtx, probeCancel := context.WithTimeout(context.Background(), *timeout)
+		probe := runTLSProbe(probeCtx, fp, urlHost, dialAddr, *useHTTP2)
+		probeCancel()
+
+		printMeta(probe.NegotiatedProtocol)
+		printTLSProbe(probe)
+		return
+	}
+
+	// -request mode: perform real HTTP request
+	request := client.Get(g.String(rawURL))
+	request.GetRequest().Host = parsedURL.Host
+	request.GetRequest().Header.Set("Accept", "*/*")
+
+	result := request.Do()
+	if result.IsErr() {
+		printMeta("")
+		fmt.Println("Error:")
+		fmt.Println(result.Err())
+		os.Exit(1)
+	}
+
+	response := result.Ok()
+	stdResponse := response.GetResponse()
+	if stdResponse.Body != nil {
+		defer stdResponse.Body.Close()
+	}
+	body := response.Body.Limit(4096).String().Unwrap()
+
+	printMeta(response.Proto.Std())
+
+	stdReq := request.GetRequest()
+
+	requestProto := response.Proto.Std()
+	if requestProto == "HTTP/2.0" {
+		requestProto = "HTTP/2"
+	}
+
+	fmt.Printf("> %s %s %s\n",
+		stdReq.Method,
+		stdReq.URL.RequestURI(),
+		requestProto,
+	)
+
+	fmt.Printf("> Host: %s\n", stdReq.Host)
+
+	for key, values := range stdReq.Header {
+		for _, value := range values {
+			fmt.Printf("> %s: %s\n", key, value)
+		}
+	}
+
+	fmt.Println(">")
+
+	fmt.Printf("< %s\n", stdResponse.Status)
+
+	for key, values := range stdResponse.Header {
+		for _, value := range values {
+			fmt.Printf("< %s: %s\n", key, value)
+		}
+	}
+
+	fmt.Println("<")
+	fmt.Println()
+	fmt.Print(body)
+	fmt.Println()
+}

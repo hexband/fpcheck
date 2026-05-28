@@ -1,0 +1,20 @@
+# binaries
+/geosite-extract
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# local scripts
+*.sh
+
+# IDE
+.idea/
+
+# OS
+.DS_Store
+
+fpcheck
