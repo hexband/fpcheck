@@ -37,6 +37,7 @@ func main() {
 	flag.Usage = usage
 
 	fingerprintName := flag.String("fp", "chrome", "fingerprint: chrome, firefox, safari, hellochrome_133, hellofirefox_148, randomized")
+	padding := flag.Int("padding", 0, "override TLS padding extension length (TLS probe only)")
 	resolveValue := flag.String("resolve", "", "curl-like DNS override: host:port:ipv4")
 	useHTTP2 := flag.Bool("http2", true, "offer h2,http/1.1 via ALPN; set false to offer only HTTP/1.1")
 	requestEnabled := flag.Bool("request", false, "perform real HTTP request through surf instead of TLS-only probe")
@@ -107,7 +108,7 @@ func main() {
 
 	if !*requestEnabled {
 		probeCtx, probeCancel := context.WithTimeout(context.Background(), *timeout)
-		probe := runTLSProbe(probeCtx, fp, urlHost, dialAddr, *useHTTP2)
+		probe := runTLSProbe(probeCtx, fp, urlHost, dialAddr, *useHTTP2, *padding)
 		probeCancel()
 
 		printRunMeta(probe.NegotiatedProtocol)

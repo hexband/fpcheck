@@ -54,7 +54,29 @@ type tlsProbeResult struct {
 	PeerCertificates   []*x509.Certificate
 }
 
-func runTLSProbe(ctx context.Context, fp *utls.ClientHelloID, sni string, dialAddr string, useHTTP2 bool) *tlsProbeResult {
+func applyExtraPadding(uconn *utls.UConn, fp *utls.ClientHelloID, extra int) error {
+	if extra <= 0 {
+		return nil
+	}
+
+	spec, err := utls.UTLSIdToSpec(*fp)
+	if err != nil {
+		return err
+	}
+
+	for _, ext := range spec.Extensions {
+		if p, ok := ext.(*utls.UtlsPaddingExtension); ok {
+			p.GetPaddingLen = func(clientHelloLen int) (int, bool) {
+				return extra, true
+			}
+			return uconn.ApplyPreset(&spec)
+		}
+	}
+
+	return fmt.Errorf("fingerprint %s has no padding extension; adding one would change JA3/JA4", fp.Str())
+}
+
+func runTLSProbe(ctx context.Context, fp *utls.ClientHelloID, sni string, dialAddr string, useHTTP2 bool, padding int) *tlsProbeResult {
 	result := &tlsProbeResult{StartedAt: time.Now()}
 	defer func() {
 		result.FinishedAt = time.Now()
@@ -89,11 +111,22 @@ func runTLSProbe(ctx context.Context, fp *utls.ClientHelloID, sni string, dialAd
 		result.NegotiatedProtocol = state.NegotiatedProtocol
 		result.PeerCertificates = state.PeerCertificates
 	} else {
+		helloID := *fp
+		if padding > 0 {
+			helloID = utls.HelloCustom
+		}
+
 		utlsConn := utls.UClient(countedConn, &utls.Config{
 			ServerName: sni,
 			NextProtos: nextProtos,
-		}, *fp)
-		err = utlsConn.HandshakeContext(ctx)
+		}, helloID)
+
+		if padding > 0 {
+			err = applyExtraPadding(utlsConn, fp, padding)
+		}
+		if err == nil {
+			err = utlsConn.HandshakeContext(ctx)
+		}
 		state := utlsConn.ConnectionState()
 		result.TLSVersion = state.Version
 		result.CipherSuite = state.CipherSuite

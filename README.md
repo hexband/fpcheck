@@ -86,14 +86,22 @@ fpcheck -request -fp firefox https://example.com/
 ```text
 -fp string
       fingerprint: chrome, firefox, safari, hellochrome_133, hellofirefox_148, randomized (default "chrome")
+      
 -http2
       offer h2,http/1.1 via ALPN; set false to offer only HTTP/1.1 (default true)
+      
 -list
       list supported fingerprint names
+      
+-padding int
+      override TLS padding extension length (TLS probe only)
+            
 -request
       perform real HTTP request through surf instead of TLS-only probe
+      
 -resolve string
       curl-like DNS override: host:port:ipv4
+      
 -timeout duration
       request/probe timeout (default 2s)
 ```

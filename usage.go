@@ -28,6 +28,7 @@ Examples:
   %[1]s -fp hellochrome_133 https://example.com/
   %[1]s -fp randomized https://example.com/
   %[1]s -http2=false -fp firefox https://example.com/
+  %[1]s -padding 200 -fp firefox https://example.com/
   %[1]s -resolve "example.com:443:127.0.0.1" https://example.com/
   %[1]s -request -fp firefox https://example.com/
 
@@ -38,6 +39,10 @@ Resolve:
 Modes:
   Default mode runs a TLS probe. It opens TCP, sends ClientHello, waits for server TLS bytes,
   and prints handshake diagnostics. It does not send an HTTP request.
+
+  -padding overrides the length of an existing TLS padding extension in TLS probe mode.
+  If the selected fingerprint does not contain a TLS padding extension, fpcheck returns an error
+  instead of adding one and changing JA3/JA4.
 
   -request mode performs a real HTTP request through surf instead of the TLS-only probe. Response body preview is limited to 4096 bytes.
 
