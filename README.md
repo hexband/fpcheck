@@ -17,6 +17,7 @@ Useful for debugging:
 
 - TLS probe mode without sending an HTTP request
 - real HTTP request mode
+- curl-like request method, headers, and body flags
 - uTLS fingerprint selection
 - HTTP/2 enable/disable switch
 - curl-like `--resolve` override
@@ -81,9 +82,37 @@ Real HTTP request:
 fpcheck -request -fp firefox https://example.com/
 ```
 
+POST JSON request:
+
+```bash
+fpcheck -X POST -H "Content-Type: application/json" -d '{"a":1}' https://example.com/api
+```
+
+Binary request body from a file:
+
+```bash
+fpcheck --data-binary @payload.bin https://example.com/api
+```
+
+HEAD request:
+
+```bash
+fpcheck -I https://example.com/
+```
+
 ## Options
 
 ```text
+-H value
+      HTTP request header in Name: value format; may be repeated and enables request mode
+-I
+      perform a HEAD request; enables request mode
+-X string
+      HTTP request method; enables request mode
+-d string
+      HTTP request body; defaults method to POST and enables request mode
+-data-binary string
+      HTTP request body or @file bytes; defaults method to POST and enables request mode
 -fp string
       fingerprint: chrome, firefox, safari, hellochrome_133, hellofirefox_148, randomized (default "chrome")
       
@@ -155,6 +184,8 @@ TLS handshake completed successfully
 ## Request mode
 
 `-request` performs a real HTTP request through `surf` instead of the TLS-only probe. Response body preview is limited to 4096 bytes.
+
+The request flags `-X`, `-H`, `-d`, `--data-binary`, and `-I` automatically enable request mode. If a body is provided with `-d` or `--data-binary` and no explicit `-X` method is set, the request method defaults to `POST`. Otherwise request mode defaults to `GET`.
 
 The tool prints:
 

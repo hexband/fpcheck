@@ -18,12 +18,21 @@ func applyFingerprint(builder *surf.Builder, fp *utls.ClientHelloID) *surf.Build
 type requestConfig struct {
 	RawURL      string
 	ParsedHost  string
+	Method      string
+	Headers     []requestHeader
+	Body        []byte
+	HasBody     bool
 	ResolveHost string
 	ResolveIP   string
 	HasResolve  bool
 	UseHTTP2    bool
 	Timeout     time.Duration
 	Fingerprint *utls.ClientHelloID
+}
+
+type requestHeader struct {
+	Name  string
+	Value string
 }
 
 func runHTTPRequest(cfg requestConfig) error {
@@ -53,9 +62,18 @@ func runHTTPRequest(cfg requestConfig) error {
 	client := builder.Build().Unwrap()
 	defer client.CloseIdleConnections()
 
-	request := client.Get(g.String(cfg.RawURL))
-	request.GetRequest().Host = cfg.ParsedHost
-	request.GetRequest().Header.Set("Accept", "*/*")
+	request := newRequest(client, cfg.Method, cfg.RawURL)
+	stdReq := request.GetRequest()
+	stdReq.Host = cfg.ParsedHost
+	stdReq.Header.Set("Accept", "*/*")
+
+	if cfg.HasBody {
+		request.Body(cfg.Body)
+	}
+
+	for _, header := range cfg.Headers {
+		stdReq.Header.Set(header.Name, header.Value)
+	}
 
 	result := request.Do()
 	if result.IsErr() {
@@ -71,7 +89,6 @@ func runHTTPRequest(cfg requestConfig) error {
 
 	printRunMeta(response.Proto.Std())
 
-	stdReq := request.GetRequest()
 	requestProto := response.Proto.Std()
 	if requestProto == "HTTP/2.0" {
 		requestProto = "HTTP/2"
@@ -100,6 +117,33 @@ func runHTTPRequest(cfg requestConfig) error {
 	fmt.Print(strings.TrimRight(body.Std(), "\n"))
 	fmt.Println()
 	return nil
+}
+
+func newRequest(client *surf.Client, method string, rawURL string) *surf.Request {
+	switch method {
+	case "CONNECT":
+		return client.Connect(g.String(rawURL))
+	case "DELETE":
+		return client.Delete(g.String(rawURL))
+	case "GET":
+		return client.Get(g.String(rawURL))
+	case "HEAD":
+		return client.Head(g.String(rawURL))
+	case "OPTIONS":
+		return client.Options(g.String(rawURL))
+	case "PATCH":
+		return client.Patch(g.String(rawURL))
+	case "POST":
+		return client.Post(g.String(rawURL))
+	case "PUT":
+		return client.Put(g.String(rawURL))
+	case "TRACE":
+		return client.Trace(g.String(rawURL))
+	default:
+		request := client.Get(g.String(rawURL))
+		request.GetRequest().Method = method
+		return request
+	}
 }
 
 func printRequestError(err error) {

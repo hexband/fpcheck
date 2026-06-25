@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -18,6 +19,40 @@ type runMetaState struct {
 	FingerprintID   string
 	SNI             string
 	DialAddr        string
+}
+
+type headerFlag []requestHeader
+
+func (h *headerFlag) String() string {
+	if h == nil {
+		return ""
+	}
+
+	var values []string
+	for _, header := range *h {
+		values = append(values, header.Name+": "+header.Value)
+	}
+
+	return strings.Join(values, ", ")
+}
+
+func (h *headerFlag) Set(value string) error {
+	name, headerValue, ok := strings.Cut(value, ":")
+	if !ok {
+		return fmt.Errorf("header must be in Name: value format")
+	}
+
+	name = strings.TrimSpace(name)
+	headerValue = strings.TrimSpace(headerValue)
+	if name == "" {
+		return fmt.Errorf("header name cannot be empty")
+	}
+	if headerValue == "" {
+		return fmt.Errorf("header value cannot be empty")
+	}
+
+	*h = append(*h, requestHeader{Name: name, Value: headerValue})
+	return nil
 }
 
 func printRunMeta(proto string) {
@@ -43,8 +78,19 @@ func main() {
 	requestEnabled := flag.Bool("request", false, "perform real HTTP request through surf instead of TLS-only probe")
 	list := flag.Bool("list", false, "list supported fingerprint names")
 	timeout := flag.Duration("timeout", 2*time.Second, "request/probe timeout")
+	method := flag.String("X", "", "HTTP request method; enables request mode")
+	head := flag.Bool("I", false, "perform a HEAD request; enables request mode")
+	data := flag.String("d", "", "HTTP request body; defaults method to POST and enables request mode")
+	dataBinary := flag.String("data-binary", "", "HTTP request body or @file bytes; defaults method to POST and enables request mode")
+	var headers headerFlag
+	flag.Var(&headers, "H", "HTTP request header in Name: value format; may be repeated and enables request mode")
 
 	flag.Parse()
+
+	specifiedFlags := map[string]bool{}
+	flag.Visit(func(f *flag.Flag) {
+		specifiedFlags[f.Name] = true
+	})
 
 	if *list {
 		for _, name := range listFingerprints() {
@@ -66,6 +112,57 @@ func main() {
 		}
 		os.Exit(2)
 	}
+
+	requestMethod := strings.ToUpper(strings.TrimSpace(*method))
+	hasMethod := specifiedFlags["X"]
+	hasData := specifiedFlags["d"]
+	hasDataBinary := specifiedFlags["data-binary"]
+	hasBody := hasData || hasDataBinary
+
+	if hasMethod && requestMethod == "" {
+		fmt.Fprintln(os.Stderr, "-X requires a method")
+		os.Exit(2)
+	}
+	if *head && hasMethod {
+		fmt.Fprintln(os.Stderr, "-I cannot be combined with -X")
+		os.Exit(2)
+	}
+	if hasData && hasDataBinary {
+		fmt.Fprintln(os.Stderr, "-d cannot be combined with --data-binary")
+		os.Exit(2)
+	}
+
+	if *head {
+		requestMethod = "HEAD"
+	} else if requestMethod == "" && hasBody {
+		requestMethod = "POST"
+	} else if requestMethod == "" {
+		requestMethod = "GET"
+	}
+
+	var requestBody []byte
+	var err error
+	if hasData {
+		requestBody = []byte(*data)
+	}
+	if hasDataBinary {
+		if after, ok := strings.CutPrefix(*dataBinary, "@"); ok {
+			if after == "" {
+				fmt.Fprintln(os.Stderr, "--data-binary @ requires a file path")
+				os.Exit(2)
+			}
+
+			requestBody, err = os.ReadFile(filepath.Clean(after))
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(2)
+			}
+		} else {
+			requestBody = []byte(*dataBinary)
+		}
+	}
+
+	autoRequestEnabled := hasMethod || *head || hasBody || len(headers) > 0
 
 	rawURL := flag.Arg(0)
 	parsedURL, err := url.Parse(rawURL)
@@ -106,7 +203,7 @@ func main() {
 		DialAddr:        dialAddr,
 	}
 
-	if !*requestEnabled {
+	if !*requestEnabled && !autoRequestEnabled {
 		probeCtx, probeCancel := context.WithTimeout(context.Background(), *timeout)
 		probe := runTLSProbe(probeCtx, fp, urlHost, dialAddr, *useHTTP2, *padding)
 		probeCancel()
@@ -119,6 +216,10 @@ func main() {
 	err = runHTTPRequest(requestConfig{
 		RawURL:      rawURL,
 		ParsedHost:  parsedURL.Host,
+		Method:      requestMethod,
+		Headers:     headers,
+		Body:        requestBody,
+		HasBody:     hasBody,
 		ResolveHost: resolveHost,
 		ResolveIP:   resolveIP,
 		HasResolve:  hasResolve,

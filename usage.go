@@ -31,6 +31,9 @@ Examples:
   %[1]s -padding 200 -fp firefox https://example.com/
   %[1]s -resolve "example.com:443:127.0.0.1" https://example.com/
   %[1]s -request -fp firefox https://example.com/
+  %[1]s -X POST -H "Content-Type: application/json" -d '{"a":1}' https://example.com/api
+  %[1]s --data-binary @payload.bin https://example.com/api
+  %[1]s -I https://example.com/
 
 Resolve:
   -resolve works like curl --resolve:
@@ -45,6 +48,8 @@ Modes:
   instead of adding one and changing JA3/JA4.
 
   -request mode performs a real HTTP request through surf instead of the TLS-only probe. Response body preview is limited to 4096 bytes.
+  -X, -H, -d, --data-binary, and -I automatically enable request mode.
+  -d and --data-binary default the method to POST unless -X is set.
 
 Output:
   * connection/debug metadata
