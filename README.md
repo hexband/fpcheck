@@ -19,6 +19,7 @@ Useful for debugging:
 - real HTTP request mode
 - curl-like request method, headers, and body flags
 - uTLS fingerprint selection
+- surf browser impersonation profiles
 - HTTP/2 enable/disable switch
 - curl-like `--resolve` override
 - handshake timing diagnostics
@@ -82,6 +83,13 @@ Real HTTP request:
 fpcheck -request -fp firefox https://example.com/
 ```
 
+Surf browser impersonation:
+
+```bash
+fpcheck -impersonate chrome https://example.com/
+fpcheck -impersonate firefox-macos https://example.com/
+```
+
 POST JSON request:
 
 ```bash
@@ -115,6 +123,8 @@ fpcheck -I https://example.com/
       HTTP request body or @file bytes; defaults method to POST and enables request mode
 -fp string
       fingerprint: chrome, firefox, safari, hellochrome_133, hellofirefox_148, randomized (default "chrome")
+-impersonate string
+      surf browser impersonation profile; enables request mode and cannot be combined with explicit -fp
       
 -http2
       offer h2,http/1.1 via ALPN; set false to offer only HTTP/1.1 (default true)
@@ -186,6 +196,8 @@ TLS handshake completed successfully
 `-request` performs a real HTTP request through `surf` instead of the TLS-only probe. Response body preview is limited to 4096 bytes.
 
 The request flags `-X`, `-H`, `-d`, `--data-binary`, and `-I` automatically enable request mode. If a body is provided with `-d` or `--data-binary` and no explicit `-X` method is set, the request method defaults to `POST`. Otherwise request mode defaults to `GET`.
+
+`-impersonate` enables surf browser impersonation for request mode and cannot be combined with explicit `-fp`. Supported profiles are `chrome` and `firefox`, with optional OS suffixes: `-windows`, `-macos`, `-linux`, `-android`, `-ios`, and `-randomos`.
 
 The tool prints:
 

@@ -15,6 +15,39 @@ func applyFingerprint(builder *surf.Builder, fp *utls.ClientHelloID) *surf.Build
 	return builder.JA().SetHelloID(*fp)
 }
 
+func applyImpersonation(builder *surf.Builder, profile string) (*surf.Builder, error) {
+	parts := strings.Split(profile, "-")
+	impersonate := builder.Impersonate()
+
+	if len(parts) == 2 {
+		switch parts[1] {
+		case "windows":
+			impersonate = impersonate.Windows()
+		case "macos":
+			impersonate = impersonate.MacOS()
+		case "linux":
+			impersonate = impersonate.Linux()
+		case "android":
+			impersonate = impersonate.Android()
+		case "ios":
+			impersonate = impersonate.IOS()
+		case "randomos":
+			impersonate = impersonate.RandomOS()
+		default:
+			return nil, fmt.Errorf("unknown impersonation OS %q", parts[1])
+		}
+	}
+
+	switch parts[0] {
+	case "chrome":
+		return impersonate.Chrome(), nil
+	case "firefox":
+		return impersonate.Firefox(), nil
+	default:
+		return nil, fmt.Errorf("unknown impersonation browser %q", parts[0])
+	}
+}
+
 type requestConfig struct {
 	RawURL      string
 	ParsedHost  string
@@ -22,6 +55,7 @@ type requestConfig struct {
 	Headers     []requestHeader
 	Body        []byte
 	HasBody     bool
+	Impersonate string
 	ResolveHost string
 	ResolveIP   string
 	HasResolve  bool
@@ -40,7 +74,13 @@ func runHTTPRequest(cfg requestConfig) error {
 	defer baseClient.CloseIdleConnections()
 
 	builder := baseClient.Builder().Timeout(cfg.Timeout).NotFollowRedirects()
-	if !isGolangFingerprint(cfg.Fingerprint) {
+	if cfg.Impersonate != "" {
+		var err error
+		builder, err = applyImpersonation(builder, cfg.Impersonate)
+		if err != nil {
+			return err
+		}
+	} else if !isGolangFingerprint(cfg.Fingerprint) {
 		builder = applyFingerprint(builder, cfg.Fingerprint)
 	}
 
@@ -48,6 +88,10 @@ func runHTTPRequest(cfg requestConfig) error {
 		builder = builder.ForceHTTP2()
 	} else {
 		builder = builder.ForceHTTP1()
+	}
+
+	if len(cfg.Headers) > 0 {
+		builder = builder.SetHeaders(requestHeaderMap(cfg.Headers))
 	}
 
 	if cfg.HasResolve {
@@ -65,14 +109,12 @@ func runHTTPRequest(cfg requestConfig) error {
 	request := newRequest(client, cfg.Method, cfg.RawURL)
 	stdReq := request.GetRequest()
 	stdReq.Host = cfg.ParsedHost
-	stdReq.Header.Set("Accept", "*/*")
+	if cfg.Impersonate == "" {
+		stdReq.Header.Set("Accept", "*/*")
+	}
 
 	if cfg.HasBody {
 		request.Body(cfg.Body)
-	}
-
-	for _, header := range cfg.Headers {
-		stdReq.Header.Set(header.Name, header.Value)
 	}
 
 	result := request.Do()
@@ -117,6 +159,15 @@ func runHTTPRequest(cfg requestConfig) error {
 	fmt.Print(strings.TrimRight(body.Std(), "\n"))
 	fmt.Println()
 	return nil
+}
+
+func requestHeaderMap(headers []requestHeader) map[string]string {
+	out := make(map[string]string, len(headers))
+	for _, header := range headers {
+		out[header.Name] = header.Value
+	}
+
+	return out
 }
 
 func newRequest(client *surf.Client, method string, rawURL string) *surf.Request {

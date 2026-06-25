@@ -31,6 +31,8 @@ Examples:
   %[1]s -padding 200 -fp firefox https://example.com/
   %[1]s -resolve "example.com:443:127.0.0.1" https://example.com/
   %[1]s -request -fp firefox https://example.com/
+  %[1]s -impersonate chrome https://example.com/
+  %[1]s -impersonate firefox-macos https://example.com/
   %[1]s -X POST -H "Content-Type: application/json" -d '{"a":1}' https://example.com/api
   %[1]s --data-binary @payload.bin https://example.com/api
   %[1]s -I https://example.com/
@@ -50,6 +52,8 @@ Modes:
   -request mode performs a real HTTP request through surf instead of the TLS-only probe. Response body preview is limited to 4096 bytes.
   -X, -H, -d, --data-binary, and -I automatically enable request mode.
   -d and --data-binary default the method to POST unless -X is set.
+  -impersonate enables surf browser impersonation for request mode and cannot be combined with -fp.
+  Supported profiles: chrome, firefox, with optional -windows, -macos, -linux, -android, -ios, -randomos suffix.
 
 Output:
   * connection/debug metadata

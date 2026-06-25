@@ -10,15 +10,18 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	utls "github.com/refraction-networking/utls"
 )
 
 var runMeta runMetaState
 
 type runMetaState struct {
-	FingerprintName string
-	FingerprintID   string
-	SNI             string
-	DialAddr        string
+	FingerprintName  string
+	FingerprintID    string
+	FingerprintLabel string
+	SNI              string
+	DialAddr         string
 }
 
 type headerFlag []requestHeader
@@ -56,8 +59,13 @@ func (h *headerFlag) Set(value string) error {
 }
 
 func printRunMeta(proto string) {
+	fingerprintLabel := runMeta.FingerprintLabel
+	if fingerprintLabel == "" {
+		fingerprintLabel = "uTLS ID"
+	}
+
 	fmt.Println("* Fingerprint:", runMeta.FingerprintName)
-	fmt.Println("* uTLS ID:", runMeta.FingerprintID)
+	fmt.Println("* "+fingerprintLabel+":", runMeta.FingerprintID)
 	fmt.Println("* SNI:", runMeta.SNI)
 	fmt.Println("* Dial:", runMeta.DialAddr)
 
@@ -72,6 +80,7 @@ func main() {
 	flag.Usage = usage
 
 	fingerprintName := flag.String("fp", "chrome", "fingerprint: chrome, firefox, safari, hellochrome_133, hellofirefox_148, randomized")
+	impersonate := flag.String("impersonate", "", "surf browser impersonation profile; enables request mode and cannot be combined with explicit -fp")
 	padding := flag.Int("padding", 0, "override TLS padding extension length (TLS probe only)")
 	resolveValue := flag.String("resolve", "", "curl-like DNS override: host:port:ipv4")
 	useHTTP2 := flag.Bool("http2", true, "offer h2,http/1.1 via ALPN; set false to offer only HTTP/1.1")
@@ -104,12 +113,13 @@ func main() {
 		os.Exit(2)
 	}
 
-	fp, ok := getFingerprint(*fingerprintName)
-	if !ok {
-		fmt.Fprintf(os.Stderr, "unknown fingerprint %q\n\nknown fingerprints:\n", *fingerprintName)
-		for _, name := range listFingerprints() {
-			fmt.Fprintf(os.Stderr, "  %s\n", name)
-		}
+	impersonationProfile, err := normalizeImpersonationProfile(*impersonate)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	if impersonationProfile != "" && specifiedFlags["fp"] {
+		fmt.Fprintln(os.Stderr, "-impersonate cannot be combined with -fp")
 		os.Exit(2)
 	}
 
@@ -141,7 +151,6 @@ func main() {
 	}
 
 	var requestBody []byte
-	var err error
 	if hasData {
 		requestBody = []byte(*data)
 	}
@@ -162,7 +171,7 @@ func main() {
 		}
 	}
 
-	autoRequestEnabled := hasMethod || *head || hasBody || len(headers) > 0
+	autoRequestEnabled := impersonationProfile != "" || hasMethod || *head || hasBody || len(headers) > 0
 
 	rawURL := flag.Arg(0)
 	parsedURL, err := url.Parse(rawURL)
@@ -196,11 +205,33 @@ func main() {
 		dialAddr = net.JoinHostPort(resolveIP, resolvePort)
 	}
 
-	runMeta = runMetaState{
-		FingerprintName: strings.ToLower(strings.TrimSpace(*fingerprintName)),
-		FingerprintID:   fp.Str(),
-		SNI:             urlHost,
-		DialAddr:        dialAddr,
+	var fp *utls.ClientHelloID
+	if impersonationProfile == "" {
+		var ok bool
+		fp, ok = getFingerprint(*fingerprintName)
+		if !ok {
+			fmt.Fprintf(os.Stderr, "unknown fingerprint %q\n\nknown fingerprints:\n", *fingerprintName)
+			for _, name := range listFingerprints() {
+				fmt.Fprintf(os.Stderr, "  %s\n", name)
+			}
+			os.Exit(2)
+		}
+
+		runMeta = runMetaState{
+			FingerprintName:  strings.ToLower(strings.TrimSpace(*fingerprintName)),
+			FingerprintID:    fp.Str(),
+			FingerprintLabel: "uTLS ID",
+			SNI:              urlHost,
+			DialAddr:         dialAddr,
+		}
+	} else {
+		runMeta = runMetaState{
+			FingerprintName:  "impersonate:" + impersonationProfile,
+			FingerprintID:    "surf " + impersonationProfile,
+			FingerprintLabel: "Profile",
+			SNI:              urlHost,
+			DialAddr:         dialAddr,
+		}
 	}
 
 	if !*requestEnabled && !autoRequestEnabled {
@@ -220,6 +251,7 @@ func main() {
 		Headers:     headers,
 		Body:        requestBody,
 		HasBody:     hasBody,
+		Impersonate: impersonationProfile,
 		ResolveHost: resolveHost,
 		ResolveIP:   resolveIP,
 		HasResolve:  hasResolve,
@@ -230,4 +262,32 @@ func main() {
 	if err != nil {
 		printRequestError(err)
 	}
+}
+
+func normalizeImpersonationProfile(value string) (string, error) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return "", nil
+	}
+
+	parts := strings.Split(value, "-")
+	if len(parts) > 2 {
+		return "", fmt.Errorf("unknown impersonation profile %q", value)
+	}
+
+	switch parts[0] {
+	case "chrome", "firefox":
+	default:
+		return "", fmt.Errorf("unknown impersonation browser %q; supported browsers: chrome, firefox", parts[0])
+	}
+
+	if len(parts) == 2 {
+		switch parts[1] {
+		case "windows", "macos", "linux", "android", "ios", "randomos":
+		default:
+			return "", fmt.Errorf("unknown impersonation OS %q; supported OS values: windows, macos, linux, android, ios, randomos", parts[1])
+		}
+	}
+
+	return value, nil
 }
