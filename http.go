@@ -140,6 +140,10 @@ func runHTTPRequest(cfg requestConfig) error {
 	fmt.Printf("> Host: %s\n", stdReq.Host)
 
 	for key, values := range stdReq.Header {
+		if isInternalHeaderOrderKey(key) {
+			continue
+		}
+
 		for _, value := range values {
 			fmt.Printf("> %s: %s\n", key, value)
 		}
@@ -159,6 +163,10 @@ func runHTTPRequest(cfg requestConfig) error {
 	fmt.Print(strings.TrimRight(body.Std(), "\n"))
 	fmt.Println()
 	return nil
+}
+
+func isInternalHeaderOrderKey(key string) bool {
+	return strings.EqualFold(key, "Header-Order:") || strings.EqualFold(key, "PHeader-Order:")
 }
 
 func requestHeaderMap(headers []requestHeader) map[string]string {
