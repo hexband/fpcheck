@@ -26,6 +26,7 @@ Useful for debugging:
 - ClientHello and server TLS byte counters
 - certificate inspection
 - ALPN reporting
+- download test for DPI that stops passing data after N bytes (`-stall`)
 
 ## Build
 
@@ -77,6 +78,12 @@ curl-like resolve override:
 
 ```bash
 fpcheck -resolve "example.com:443:127.0.0.1" https://example.com/
+```
+
+Download test (detect a DPI freeze after N bytes):
+
+```bash
+fpcheck -stall -resolve "example.com:443:1.2.3.4" https://example.com/assets/probe.bin
 ```
 
 Real HTTP request:
@@ -143,6 +150,15 @@ fpcheck -I https://example.com/
 -resolve string
       curl-like DNS override: host:port:ipv4
       
+-stall
+      after the TLS probe, download the URL on the same connection and detect a DPI freeze (TLS probe only)
+      
+-stall-timeout duration
+      with -stall: no new server bytes for this long means the connection froze (default 5s)
+      
+-max-bytes string
+      with -stall: bytes to download (sent as Range) before the test counts as passed (default "256KB")
+      
 -timeout duration
       request/probe timeout (default 2s)
 ```
@@ -192,6 +208,41 @@ Certificate:
 ──────────────────────────────────────────────────
 TLS handshake completed successfully
 ```
+
+## Download test
+
+`-stall` adds a download test to the TLS probe. It catches DPI that lets the TCP and TLS handshakes through and then silently stops passing data after some amount, often reported around 14-20 KB from the server: no RST, no FIN, the connection just goes quiet.
+
+After the handshake, on the same connection and with the same fingerprint and ALPN, fpcheck requests the URL with `Range: bytes=0-<max-bytes - 1>` (HTTP/1.1 or h2, whichever was negotiated) and watches the raw TCP bytes coming from the server, handshake included. If the counter stops growing for `-stall-timeout` while the connection is still open, the test reports a freeze.
+
+Outcomes:
+
+- download completed: `-max-bytes` received without a stall
+- freeze: data stopped at N bytes from the server, no RST/FIN
+- reset: RST at N bytes
+- closed early: EOF before the expected body length
+- too small to tell: the response ended before 32 KB from the server; use a larger file
+- the server answered a non-2xx status: check the URL
+
+The URL must serve a file larger than `-max-bytes`, and the server should support `Range` (Caddy's `file_server` does). Random content is best, so that compression cannot shrink the response below the threshold. `-stall` cannot be combined with request mode.
+
+Example output:
+
+```text
+Download Test
+──────────────────────────────────────────────────
+Request              GET /assets/probe.bin (h2, bytes=0-262143)
+Status               206 Partial Content
+Body bytes           0 of 262 144
+Server bytes (TCP)   16 384 (handshake 1 985)
+Last data at         +31ms
+Idle                 5s (connection still open)
+Download time        5.101s
+──────────────────────────────────────────────────
+Data stopped at 16 384 bytes from the server, no RST/FIN: looks like a DPI freeze
+```
+
+`Body bytes` can be 0 even though data came in: when the stream stops in the middle of a TLS record, nothing of that record can be decrypted. `Server bytes (TCP)` is the number to compare with DPI thresholds.
 
 ## Request mode
 

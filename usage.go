@@ -30,6 +30,7 @@ Examples:
   %[1]s -http2=false -fp firefox https://example.com/
   %[1]s -padding 200 -fp hellochrome_120 https://example.com/
   %[1]s -resolve "example.com:443:127.0.0.1" https://example.com/
+  %[1]s -stall -resolve "example.com:443:1.2.3.4" https://example.com/assets/probe.bin
   %[1]s -request -fp firefox https://example.com/
   %[1]s -impersonate chrome https://example.com/
   %[1]s -impersonate firefox-macos https://example.com/
@@ -48,6 +49,12 @@ Modes:
   -padding overrides the length of an existing TLS padding extension in TLS probe mode.
   If the selected fingerprint does not contain a TLS padding extension, fpcheck returns an error
   instead of adding one and changing JA3/JA4.
+
+  -stall adds a download test to the TLS probe. On the same connection and with the same
+  fingerprint it requests the URL with Range: bytes=0-<max-bytes - 1> and watches the raw TCP
+  bytes from the server. If they stop growing for -stall-timeout while the connection stays
+  open (no RST, no FIN), it reports a freeze, the way some DPI stops passing data after N bytes.
+  Use a URL that serves a large file.
 
   -request mode performs a real HTTP request through surf instead of the TLS-only probe. Response body preview is limited to 4096 bytes.
   -X, -H, -d, --data-binary, and -I automatically enable request mode.

@@ -82,6 +82,9 @@ func main() {
 	fingerprintName := flag.String("fp", "chrome", "fingerprint: chrome, firefox, safari, hellochrome_155, hellofirefox_148, randomized")
 	impersonate := flag.String("impersonate", "", "surf browser impersonation profile; enables request mode and cannot be combined with explicit -fp")
 	padding := flag.Int("padding", 0, "override TLS padding extension length (TLS probe only)")
+	stallEnabled := flag.Bool("stall", false, "after the TLS probe, download the URL on the same connection and detect a DPI freeze (TLS probe only)")
+	stallTimeout := flag.Duration("stall-timeout", 5*time.Second, "with -stall: no new server bytes for this long means the connection froze")
+	maxBytesValue := flag.String("max-bytes", "256KB", "with -stall: bytes to download (sent as Range) before the test counts as passed")
 	resolveValue := flag.String("resolve", "", "curl-like DNS override: host:port:ipv4")
 	useHTTP2 := flag.Bool("http2", true, "offer h2,http/1.1 via ALPN; set false to offer only HTTP/1.1")
 	requestEnabled := flag.Bool("request", false, "perform real HTTP request through surf instead of TLS-only probe")
@@ -173,6 +176,23 @@ func main() {
 
 	autoRequestEnabled := impersonationProfile != "" || hasMethod || *head || hasBody || len(headers) > 0
 
+	var maxBytes int64
+	if *stallEnabled {
+		if *requestEnabled || autoRequestEnabled {
+			fmt.Fprintln(os.Stderr, "-stall works only in TLS probe mode; it cannot be combined with -request, -impersonate, -X, -I, -H, -d or --data-binary")
+			os.Exit(2)
+		}
+		if *stallTimeout <= 0 {
+			fmt.Fprintln(os.Stderr, "-stall-timeout must be positive")
+			os.Exit(2)
+		}
+		maxBytes, err = parseByteSize(*maxBytesValue)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "-max-bytes:", err)
+			os.Exit(2)
+		}
+	}
+
 	rawURL := flag.Arg(0)
 	parsedURL, err := url.Parse(rawURL)
 	if err != nil {
@@ -236,11 +256,26 @@ func main() {
 
 	if !*requestEnabled && !autoRequestEnabled {
 		probeCtx, probeCancel := context.WithTimeout(context.Background(), *timeout)
-		probe := runTLSProbe(probeCtx, fp, urlHost, dialAddr, *useHTTP2, *padding)
+		var stall *stallConfig
+		if *stallEnabled {
+			stall = &stallConfig{
+				MaxBytes:    maxBytes,
+				IdleTimeout: *stallTimeout,
+				Host:        parsedURL.Host,
+				RequestURI:  parsedURL.RequestURI(),
+			}
+		}
+		probe := runTLSProbe(probeCtx, fp, urlHost, dialAddr, *useHTTP2, *padding, stall)
 		probeCancel()
 
 		printRunMeta(probe.NegotiatedProtocol)
 		printTLSProbe(probe)
+		if probe.Stall != nil {
+			printStallResult(probe.Stall, stall)
+		} else if stall != nil {
+			fmt.Println()
+			fmt.Println(cYellow("Download test skipped: TLS handshake did not complete"))
+		}
 		return
 	}
 

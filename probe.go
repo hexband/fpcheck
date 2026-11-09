@@ -18,12 +18,14 @@ type countingConn struct {
 	net.Conn
 	bytesRead    int64
 	bytesWritten int64
+	lastReadNano int64
 }
 
 func (c *countingConn) Read(p []byte) (int, error) {
 	n, err := c.Conn.Read(p)
 	if n > 0 {
 		atomic.AddInt64(&c.bytesRead, int64(n))
+		atomic.StoreInt64(&c.lastReadNano, time.Now().UnixNano())
 	}
 	return n, err
 }
@@ -52,6 +54,7 @@ type tlsProbeResult struct {
 	TLSHandshakeEnd    time.Time
 	FinishedAt         time.Time
 	PeerCertificates   []*x509.Certificate
+	Stall              *stallResult
 }
 
 func applyExtraPadding(uconn *utls.UConn, fp *utls.ClientHelloID, extra int) error {
@@ -76,7 +79,7 @@ func applyExtraPadding(uconn *utls.UConn, fp *utls.ClientHelloID, extra int) err
 	return fmt.Errorf("fingerprint %s has no padding extension; adding one would change JA3/JA4", fp.Str())
 }
 
-func runTLSProbe(ctx context.Context, fp *utls.ClientHelloID, sni string, dialAddr string, useHTTP2 bool, padding int) *tlsProbeResult {
+func runTLSProbe(ctx context.Context, fp *utls.ClientHelloID, sni string, dialAddr string, useHTTP2 bool, padding int, stall *stallConfig) *tlsProbeResult {
 	result := &tlsProbeResult{StartedAt: time.Now()}
 	defer func() {
 		result.FinishedAt = time.Now()
@@ -98,6 +101,7 @@ func runTLSProbe(ctx context.Context, fp *utls.ClientHelloID, sni string, dialAd
 		nextProtos = []string{"h2", "http/1.1"}
 	}
 
+	var conn net.Conn
 	result.TLSHandshakeStart = time.Now()
 	if isGolangFingerprint(fp) {
 		tlsConn := tls.Client(countedConn, &tls.Config{
@@ -105,6 +109,7 @@ func runTLSProbe(ctx context.Context, fp *utls.ClientHelloID, sni string, dialAd
 			NextProtos: nextProtos,
 		})
 		err = tlsConn.HandshakeContext(ctx)
+		conn = tlsConn
 		state := tlsConn.ConnectionState()
 		result.TLSVersion = state.Version
 		result.CipherSuite = state.CipherSuite
@@ -127,6 +132,7 @@ func runTLSProbe(ctx context.Context, fp *utls.ClientHelloID, sni string, dialAd
 		if err == nil {
 			err = utlsConn.HandshakeContext(ctx)
 		}
+		conn = utlsConn
 		state := utlsConn.ConnectionState()
 		result.TLSVersion = state.Version
 		result.CipherSuite = state.CipherSuite
@@ -139,6 +145,10 @@ func runTLSProbe(ctx context.Context, fp *utls.ClientHelloID, sni string, dialAd
 	result.BytesRead = atomic.LoadInt64(&countedConn.bytesRead)
 	result.TLSError = err
 	result.TLSHandshakeDone = err == nil
+
+	if stall != nil && result.TLSHandshakeDone {
+		result.Stall = runStallTest(conn, countedConn, result.NegotiatedProtocol, stall)
+	}
 	return result
 }
 
