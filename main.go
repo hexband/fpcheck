@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"flag"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -12,6 +12,7 @@ import (
 	"time"
 
 	utls "github.com/refraction-networking/utls"
+	flag "github.com/spf13/pflag"
 )
 
 var runMeta runMetaState
@@ -37,6 +38,10 @@ func (h *headerFlag) String() string {
 	}
 
 	return strings.Join(values, ", ")
+}
+
+func (h *headerFlag) Type() string {
+	return "header"
 }
 
 func (h *headerFlag) Set(value string) error {
@@ -80,24 +85,32 @@ func main() {
 	flag.Usage = usage
 
 	fingerprintName := flag.String("fp", "chrome", "fingerprint: chrome, firefox, safari, hellochrome_155, hellofirefox_148, randomized")
-	impersonate := flag.String("impersonate", "", "surf browser impersonation profile; enables request mode and cannot be combined with explicit -fp")
+	impersonate := flag.String("impersonate", "", "surf browser impersonation profile; enables request mode and cannot be combined with explicit --fp")
 	padding := flag.Int("padding", 0, "override TLS padding extension length (TLS probe only)")
 	stallEnabled := flag.Bool("stall", false, "after the TLS probe, download the URL on the same connection and detect a DPI freeze (TLS probe only)")
-	stallTimeout := flag.Duration("stall-timeout", 5*time.Second, "with -stall: no new server bytes for this long means the connection froze")
-	maxBytesValue := flag.String("max-bytes", "256KB", "with -stall: bytes to download (sent as Range) before the test counts as passed")
+	stallTimeout := flag.Duration("stall-timeout", 5*time.Second, "with --stall: no new server bytes for this long means the connection froze")
+	maxBytesValue := flag.String("max-bytes", "256KB", "with --stall: bytes to download (sent as Range) before the test counts as passed")
 	resolveValue := flag.String("resolve", "", "curl-like DNS override: host:port:ipv4")
-	useHTTP2 := flag.Bool("http2", true, "offer h2,http/1.1 via ALPN; set false to offer only HTTP/1.1")
+	useHTTP2 := flag.Bool("http2", true, "offer h2,http/1.1 via ALPN; --http2=false offers only HTTP/1.1")
 	requestEnabled := flag.Bool("request", false, "perform real HTTP request through surf instead of TLS-only probe")
 	list := flag.Bool("list", false, "list supported fingerprint names")
 	timeout := flag.Duration("timeout", 2*time.Second, "request/probe timeout")
-	method := flag.String("X", "", "HTTP request method; enables request mode")
-	head := flag.Bool("I", false, "perform a HEAD request; enables request mode")
-	data := flag.String("d", "", "HTTP request body; defaults method to POST and enables request mode")
+	method := flag.StringP("method", "X", "", "HTTP request method; enables request mode")
+	head := flag.BoolP("head", "I", false, "perform a HEAD request; enables request mode")
+	data := flag.StringP("data", "d", "", "HTTP request body; defaults method to POST and enables request mode")
 	dataBinary := flag.String("data-binary", "", "HTTP request body or @file bytes; defaults method to POST and enables request mode")
 	var headers headerFlag
-	flag.Var(&headers, "H", "HTTP request header in Name: value format; may be repeated and enables request mode")
+	flag.VarP(&headers, "header", "H", "HTTP request header in Name: value format; may be repeated and enables request mode")
 
-	flag.Parse()
+	flag.CommandLine.SortFlags = false
+	flag.CommandLine.Init(filepath.Base(os.Args[0]), flag.ContinueOnError)
+	if err := flag.CommandLine.Parse(os.Args[1:]); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return // pflag has already printed the usage
+		}
+		fmt.Fprintf(os.Stderr, "fpcheck: %v\nRun 'fpcheck --help' for usage.\n", err)
+		os.Exit(2)
+	}
 
 	specifiedFlags := map[string]bool{}
 	flag.Visit(func(f *flag.Flag) {
@@ -122,26 +135,26 @@ func main() {
 		os.Exit(2)
 	}
 	if impersonationProfile != "" && specifiedFlags["fp"] {
-		fmt.Fprintln(os.Stderr, "-impersonate cannot be combined with -fp")
+		fmt.Fprintln(os.Stderr, "--impersonate cannot be combined with --fp")
 		os.Exit(2)
 	}
 
 	requestMethod := strings.ToUpper(strings.TrimSpace(*method))
-	hasMethod := specifiedFlags["X"]
-	hasData := specifiedFlags["d"]
+	hasMethod := specifiedFlags["method"]
+	hasData := specifiedFlags["data"]
 	hasDataBinary := specifiedFlags["data-binary"]
 	hasBody := hasData || hasDataBinary
 
 	if hasMethod && requestMethod == "" {
-		fmt.Fprintln(os.Stderr, "-X requires a method")
+		fmt.Fprintln(os.Stderr, "-X/--method requires a method")
 		os.Exit(2)
 	}
 	if *head && hasMethod {
-		fmt.Fprintln(os.Stderr, "-I cannot be combined with -X")
+		fmt.Fprintln(os.Stderr, "-I/--head cannot be combined with -X/--method")
 		os.Exit(2)
 	}
 	if hasData && hasDataBinary {
-		fmt.Fprintln(os.Stderr, "-d cannot be combined with --data-binary")
+		fmt.Fprintln(os.Stderr, "-d/--data cannot be combined with --data-binary")
 		os.Exit(2)
 	}
 
@@ -179,16 +192,16 @@ func main() {
 	var maxBytes int64
 	if *stallEnabled {
 		if *requestEnabled || autoRequestEnabled {
-			fmt.Fprintln(os.Stderr, "-stall works only in TLS probe mode; it cannot be combined with -request, -impersonate, -X, -I, -H, -d or --data-binary")
+			fmt.Fprintln(os.Stderr, "--stall works only in TLS probe mode; it cannot be combined with --request, --impersonate, -X, -I, -H, -d or --data-binary")
 			os.Exit(2)
 		}
 		if *stallTimeout <= 0 {
-			fmt.Fprintln(os.Stderr, "-stall-timeout must be positive")
+			fmt.Fprintln(os.Stderr, "--stall-timeout must be positive")
 			os.Exit(2)
 		}
 		maxBytes, err = parseByteSize(*maxBytesValue)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "-max-bytes:", err)
+			fmt.Fprintln(os.Stderr, "--max-bytes:", err)
 			os.Exit(2)
 		}
 	}

@@ -127,7 +127,11 @@ func runHTTPRequest(cfg requestConfig) error {
 	if stdResponse.Body != nil {
 		defer stdResponse.Body.Close()
 	}
-	body := response.Body.Limit(4096).String().Unwrap()
+	// HEAD responses and some status codes have no body at all.
+	var body g.String
+	if read := response.Body.Limit(4096).String(); read.IsOk() {
+		body = read.Ok()
+	}
 
 	printRunMeta(response.Proto.Std())
 

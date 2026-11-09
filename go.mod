@@ -8,6 +8,7 @@ require (
 	github.com/fatih/color v1.19.0
 	github.com/miekg/dns v1.1.73
 	github.com/refraction-networking/utls v1.8.3-0.20261108164504-a13c59ffe98b
+	github.com/spf13/pflag v1.0.10
 	github.com/xtls/xray-core v1.260327.1-0.20261109052709-676eaf66f8f0
 	golang.org/x/net v0.62.0
 )
