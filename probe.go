@@ -57,26 +57,48 @@ type tlsProbeResult struct {
 	Stall              *stallResult
 }
 
-func applyExtraPadding(uconn *utls.UConn, fp *utls.ClientHelloID, extra int) error {
-	if extra <= 0 {
-		return nil
+// customHelloSpec returns the fingerprint's ClientHello spec with the padding
+// length and the ALPN list overridden, or nil when nothing has to change.
+// uTLS browser profiles carry their own ALPN and ignore Config.NextProtos, so
+// --http2=false has to rewrite the ALPN extension in the spec. Randomized
+// fingerprints have no fixed spec; they already follow Config.NextProtos.
+func customHelloSpec(fp *utls.ClientHelloID, padding int, nextProtos []string, useHTTP2 bool) (*utls.ClientHelloSpec, error) {
+	if padding <= 0 && useHTTP2 {
+		return nil, nil
 	}
 
 	spec, err := utls.UTLSIdToSpec(*fp)
 	if err != nil {
-		return err
+		if padding > 0 {
+			return nil, err
+		}
+		return nil, nil
 	}
 
-	for _, ext := range spec.Extensions {
-		if p, ok := ext.(*utls.UtlsPaddingExtension); ok {
-			p.GetPaddingLen = func(clientHelloLen int) (int, bool) {
-				return extra, true
+	if padding > 0 {
+		found := false
+		for _, ext := range spec.Extensions {
+			if p, ok := ext.(*utls.UtlsPaddingExtension); ok {
+				p.GetPaddingLen = func(clientHelloLen int) (int, bool) {
+					return padding, true
+				}
+				found = true
 			}
-			return uconn.ApplyPreset(&spec)
+		}
+		if !found {
+			return nil, fmt.Errorf("fingerprint %s has no padding extension; adding one would change JA3/JA4", fp.Str())
 		}
 	}
 
-	return fmt.Errorf("fingerprint %s has no padding extension; adding one would change JA3/JA4", fp.Str())
+	if !useHTTP2 {
+		for _, ext := range spec.Extensions {
+			if alpn, ok := ext.(*utls.ALPNExtension); ok {
+				alpn.AlpnProtocols = append([]string(nil), nextProtos...)
+			}
+		}
+	}
+
+	return &spec, nil
 }
 
 func runTLSProbe(ctx context.Context, fp *utls.ClientHelloID, sni string, dialAddr string, useHTTP2 bool, padding int, stall *stallConfig) *tlsProbeResult {
@@ -117,7 +139,8 @@ func runTLSProbe(ctx context.Context, fp *utls.ClientHelloID, sni string, dialAd
 		result.PeerCertificates = state.PeerCertificates
 	} else {
 		helloID := *fp
-		if padding > 0 {
+		spec, specErr := customHelloSpec(fp, padding, nextProtos, useHTTP2)
+		if spec != nil {
 			helloID = utls.HelloCustom
 		}
 
@@ -126,8 +149,9 @@ func runTLSProbe(ctx context.Context, fp *utls.ClientHelloID, sni string, dialAd
 			NextProtos: nextProtos,
 		}, helloID)
 
-		if padding > 0 {
-			err = applyExtraPadding(utlsConn, fp, padding)
+		err = specErr
+		if err == nil && spec != nil {
+			err = utlsConn.ApplyPreset(spec)
 		}
 		if err == nil {
 			err = utlsConn.HandshakeContext(ctx)

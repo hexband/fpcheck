@@ -91,7 +91,7 @@ func main() {
 	stallTimeout := flag.Duration("stall-timeout", 5*time.Second, "with --stall: no new server bytes for this long means the connection froze")
 	maxBytesValue := flag.String("max-bytes", "256KB", "with --stall: bytes to download (sent as Range) before the test counts as passed")
 	resolveValue := flag.String("resolve", "", "curl-like DNS override: host:port:ipv4")
-	useHTTP2 := flag.Bool("http2", true, "offer h2,http/1.1 via ALPN; --http2=false offers only HTTP/1.1")
+	useHTTP2 := flag.Bool("http2", true, "offer h2,http/1.1 via ALPN; --http2=false offers only HTTP/1.1 (rewrites the fingerprint's ALPN, so JA3/JA4 change)")
 	requestEnabled := flag.Bool("request", false, "perform real HTTP request through surf instead of TLS-only probe")
 	list := flag.Bool("list", false, "list supported fingerprint names")
 	timeout := flag.Duration("timeout", 2*time.Second, "request/probe timeout")

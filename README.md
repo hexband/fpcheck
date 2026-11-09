@@ -68,7 +68,7 @@ Randomized fingerprint:
 fpcheck --fp randomized https://example.com/
 ```
 
-Disable HTTP/2 ALPN:
+Disable HTTP/2 ALPN (the fingerprint's ALPN extension is rewritten to `http/1.1`, so JA3/JA4 change):
 
 ```bash
 fpcheck --http2=false --fp firefox https://example.com/
@@ -129,7 +129,7 @@ Options can go before or after the URL. Use `--` to end options.
     --stall-timeout duration   with --stall: no new server bytes for this long means the connection froze (default 5s)
     --max-bytes string         with --stall: bytes to download (sent as Range) before the test counts as passed (default "256KB")
     --resolve string           curl-like DNS override: host:port:ipv4
-    --http2                    offer h2,http/1.1 via ALPN; --http2=false offers only HTTP/1.1 (default true)
+    --http2                    offer h2,http/1.1 via ALPN; --http2=false offers only HTTP/1.1 (rewrites the fingerprint's ALPN, so JA3/JA4 change) (default true)
     --request                  perform real HTTP request through surf instead of TLS-only probe
     --list                     list supported fingerprint names
     --timeout duration         request/probe timeout (default 2s)
