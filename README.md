@@ -29,6 +29,8 @@ Useful for debugging:
 
 ## Build
 
+Requires Go 1.27 or newer.
+
 ```bash
 go build -o fpcheck .
 ```
@@ -56,7 +58,7 @@ fpcheck -fp firefox https://example.com/
 Specific Chrome fingerprint:
 
 ```bash
-fpcheck -fp hellochrome_133 https://example.com/
+fpcheck -fp hellochrome_155 https://example.com/
 ```
 
 Randomized fingerprint:
@@ -122,7 +124,7 @@ fpcheck -I https://example.com/
 -data-binary string
       HTTP request body or @file bytes; defaults method to POST and enables request mode
 -fp string
-      fingerprint: chrome, firefox, safari, hellochrome_133, hellofirefox_148, randomized (default "chrome")
+      fingerprint: chrome, firefox, safari, hellochrome_155, hellofirefox_148, randomized (default "chrome")
 -impersonate string
       surf browser impersonation profile; enables request mode and cannot be combined with explicit -fp
       
@@ -162,8 +164,8 @@ No HTTP request is sent.
 Example output:
 
 ```text
-* Fingerprint: hellochrome_96
-* uTLS ID: Chrome-96
+* Fingerprint: chrome
+* uTLS ID: Chrome-155
 * SNI: www.example.com
 * Dial: www.example.com:443
 * Proto: h2
@@ -172,7 +174,7 @@ TLS Probe
 ──────────────────────────────────────────────────
 TCP connected        YES
 TCP connect time     52ms
-ClientHello bytes    581
+ClientHello bytes    1 950
 Server TLS bytes     7 534
 TLS handshake        YES
 TLS handshake time   74ms
@@ -197,7 +199,7 @@ TLS handshake completed successfully
 
 The request flags `-X`, `-H`, `-d`, `--data-binary`, and `-I` automatically enable request mode. If a body is provided with `-d` or `--data-binary` and no explicit `-X` method is set, the request method defaults to `POST`. Otherwise request mode defaults to `GET`.
 
-`-impersonate` enables surf browser impersonation for request mode and cannot be combined with explicit `-fp`. Supported profiles are `chrome` and `firefox`, with optional OS suffixes: `-windows`, `-macos`, `-linux`, `-android`, `-ios`, and `-randomos`.
+`-impersonate` enables surf browser impersonation for request mode and cannot be combined with explicit `-fp`. Supported profiles are `chrome` and `firefox`, with optional OS suffixes: `-windows`, `-macos`, `-linux`, `-android`, `-ios`, and `-randomos`. The bundled surf v1.0.209 impersonates Chrome 156 (Chrome 157 on iOS) and Firefox 159.
 
 The tool prints:
 
@@ -222,7 +224,7 @@ List supported fingerprints:
 fpcheck -list
 ```
 
-The exact list depends on the bundled `uTLS` and `xray-core` versions.
+The exact list depends on the bundled `uTLS` and `xray-core` versions. Names follow xray-core's `fingerprint` setting: `chrome` is uTLS `HelloChrome_Auto` (currently Chrome 155), `firefox` is Firefox 148, `safari` is Safari 26.3, `edge` is Edge 85.
 
 ## Resolve override
 
@@ -252,6 +254,7 @@ IPv6 is not currently supported by `-resolve`.
 
 - `ClientHello bytes` and `Server TLS bytes` are raw TLS byte counters during the handshake.
 - `Server TLS bytes` are not limited to `ServerHello`; they may include certificates and other handshake records.
+- `-padding` only works with fingerprints that already have a padding extension, such as `hellochrome_120`. Chrome 131+, Firefox 148 and Safari 26.3 have none, and adding one would change JA3/JA4.
 
 ## License
 

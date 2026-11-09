@@ -79,7 +79,7 @@ func printRunMeta(proto string) {
 func main() {
 	flag.Usage = usage
 
-	fingerprintName := flag.String("fp", "chrome", "fingerprint: chrome, firefox, safari, hellochrome_133, hellofirefox_148, randomized")
+	fingerprintName := flag.String("fp", "chrome", "fingerprint: chrome, firefox, safari, hellochrome_155, hellofirefox_148, randomized")
 	impersonate := flag.String("impersonate", "", "surf browser impersonation profile; enables request mode and cannot be combined with explicit -fp")
 	padding := flag.Int("padding", 0, "override TLS padding extension length (TLS probe only)")
 	resolveValue := flag.String("resolve", "", "curl-like DNS override: host:port:ipv4")

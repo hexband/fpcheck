@@ -10,9 +10,6 @@ import (
 
 var extraFingerprints = map[string]*utls.ClientHelloID{
 	// Overlay for uTLS fingerprints that may exist before xray-core updates its registry.
-	"hellofirefox_148": &utls.HelloFirefox_148,
-	"hellochrome_133":  &utls.HelloChrome_133,
-	"hellosafari_26_3": &utls.HelloSafari_26_3,
 }
 
 func getFingerprint(name string) (*utls.ClientHelloID, bool) {

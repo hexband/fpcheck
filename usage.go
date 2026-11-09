@@ -25,10 +25,10 @@ Options:
 Examples:
   %[1]s https://example.com/
   %[1]s -fp firefox https://example.com/
-  %[1]s -fp hellochrome_133 https://example.com/
+  %[1]s -fp hellochrome_155 https://example.com/
   %[1]s -fp randomized https://example.com/
   %[1]s -http2=false -fp firefox https://example.com/
-  %[1]s -padding 200 -fp firefox https://example.com/
+  %[1]s -padding 200 -fp hellochrome_120 https://example.com/
   %[1]s -resolve "example.com:443:127.0.0.1" https://example.com/
   %[1]s -request -fp firefox https://example.com/
   %[1]s -impersonate chrome https://example.com/
