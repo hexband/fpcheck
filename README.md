@@ -30,11 +30,16 @@ Useful for debugging:
 
 ## Build
 
-Requires Go 1.27 or newer.
-
 ```bash
-go build -o fpcheck .
+GOTOOLCHAIN=go1.27.3 go build -o fpcheck .
+GOTOOLCHAIN=go1.27.3 go test ./...
 ```
+
+Build with Go 1.27.3 (`toolchain` in go.mod; GOTOOLCHAIN also stops a newer
+local Go from being used), the toolchain of the official Xray release
+(`xray version`). `--dump` takes the Go TLS ClientHello (`unsafe`,
+`hellogolang`) from the Go fpcheck is built with, so it matches clients only
+on the same version; it warns otherwise. Bump `toolchain` in go.mod and `xrayReleaseGo` in dump.go together with xray-core.
 
 ## Usage
 
@@ -253,6 +258,75 @@ fpcheck --list
 ```
 
 The exact list depends on the bundled `uTLS` and `xray-core` versions. Names follow xray-core's `fingerprint` setting: `chrome` is uTLS `HelloChrome_Auto` (currently Chrome 155), `firefox` is Firefox 148, `safari` is Safari 26.3, `edge` is Edge 85.
+
+## Fingerprint dump
+
+`--dump` prints the JA4 and JA3 that every uTLS fingerprint of xray-core,
+sing-box and mihomo produces. It needs no URL and no network: fpcheck builds
+each ClientHello the way the core does and computes the fingerprints from it.
+
+```bash
+fpcheck --dump                                  # all cores, table + allowlist candidates
+fpcheck --dump --core mihomo --core sing-box    # selected cores
+fpcheck --dump --json > fingerprints.json
+fpcheck --dump --pq-only                       # only what REALITY accepts
+fpcheck --dump --profiles hellochrome_155,hellofirefox_148,hellosafari_26_3 --yaml
+                                                # ja4_allowlist for these profiles
+fpcheck --dump --names                          # ja4_names: every known JA4 -> fingerprint name
+```
+
+- JA4 follows the FoxIO spec. JA3 has its extensions sorted: Chrome shuffles
+  its extensions per connection, so wire-order JA3 is not stable. Both are
+  checked against reference values for real ClientHellos (`ja4_test.go`).
+- xray-core: the fingerprints of the bundled xray-core module, built through
+  its own `tls.UClient`; the version is printed per row.
+- sing-box (1.14.4; 1.15.0-alpha.13 and sing-box-extended 2.7.3 are identical
+  here) and mihomo (1.19.34, Alpha) both use `github.com/metacubex/utls`
+  at different versions, and one binary links only one. Their tables in
+  `cores_metacubex.go` name the concrete profile each core resolves a
+  fingerprint to at its own utls version (`chrome` → Chrome 133, `firefox` →
+  Firefox 120 in sing-box, Firefox 148 in mihomo, ...). Update them together
+  with the core versions.
+- `*` marks the fingerprints a core's `random` setting picks from (once per
+  process start).
+- Every fingerprint is built `--runs` times (default 5). A profile whose JA4
+  changes between builds (some profiles have random parts) is shown with its
+  number of variants and left out of the allowlist candidates. Randomized
+  presets are not dumped: their JA4 is different on every process start.
+- `--profiles` takes the same names as `--fp` (xray-core's `fingerprint`,
+  see `--list`). Each name stands for the uTLS profile it builds, and the
+  fingerprints of every core that build that profile are kept (mihomo
+  `firefox` for `hellofirefox_148`). It fails on an unknown or randomized name
+  and on a profile none of the selected cores builds. With `--yaml` the result is printed as a
+  YAML list, `ja4_allowlist`.
+- By default xray-core rows are its presets and the `random` pool; `--all`
+  adds every old fingerprint xray still accepts (`OtherFingerprints`:
+  `hellochrome_58` ... `hellochrome_120_pq`, `hellogolang`, ...).
+- `--names` (implies `--all`) prints `ja4_names` (YAML): every stable JA4 of the selected
+  cores with the `--fp` name(s) of the profile behind it (`hellochrome_133`
+  also for sing-box/mihomo `chrome`; profiles xray has no name for keep the
+  uTLS profile string).
+- `PQ`: the ClientHello carries an X25519MLKEM768 key share. REALITY servers
+  from Xray-core v26.9.8 on reject hellos without one (hexband/REALITY: unless
+  `XRAY_REALITY_NONPQ_CLIENTS` allows them). Allowlist candidates are the
+  post-quantum profiles that xray-core's own presets (`chrome`, `firefox`,
+  `safari`, ...) resolve to in the bundled version; older post-quantum
+  profiles (Chrome 131/133), the Go crypto/tls hellos and the rest are listed
+  separately. `--pq-only` drops the non-post-quantum rows everywhere.
+- JA4 does not cover the supported groups or the key shares: a hello with the
+  X25519MLKEM768 share removed (sing-box REALITY, mihomo REALITY without
+  `support-x25519mlkem768`) has the same JA4 as the full one. JA3 includes
+  the groups and differs. `hellochrome_120_pq` (draft Kyber) and
+  `hellochrome_131` (X25519MLKEM768) share a JA4 for the same reason.
+- `unsafe` is xray without uTLS: Go's crypto/tls, so its hello follows the Go
+  version the client is built with (see Build). `hellogolang` is uTLS's copy
+  of the Go hello. Both are accepted for TLS streams, not for REALITY.
+- PSK profiles (`hellochrome_100_psk`, `..._112_psk_shuf`,
+  `..._114_padding_psk_shuf`, `..._115_pq_psk`) are reported as unusable: xray
+  does not set uTLS `OmitEmptyPsk`, so without a session to resume the
+  handshake fails before a ClientHello is sent.
+- ALPN: fixed xray and mihomo profiles send their own ALPN; sing-box writes
+  the configured one (`--alpn`) into the profile, as its `alpn` option does.
 
 ## Resolve override
 

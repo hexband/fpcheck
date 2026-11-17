@@ -2,10 +2,13 @@ module github.com/hexband/fpcheck
 
 go 1.27
 
+toolchain go1.27.3
+
 require (
 	github.com/enetx/g v1.1.1
 	github.com/enetx/surf v1.0.209
 	github.com/fatih/color v1.19.0
+	github.com/metacubex/utls v1.9.0-alpha.1
 	github.com/miekg/dns v1.1.73
 	github.com/refraction-networking/utls v1.8.3-0.20261108164504-a13c59ffe98b
 	github.com/spf13/pflag v1.0.10
@@ -29,6 +32,7 @@ require (
 	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba // indirect
 	golang.org/x/crypto v0.58.0 // indirect
 	golang.org/x/crypto/x509roots/fallback v0.0.0-20261020153306-9f2b28d4331a // indirect
+	golang.org/x/exp v0.0.0-20240904232852-e7e105dedf7e // indirect
 	golang.org/x/sync v0.24.0 // indirect
 	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
