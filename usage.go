@@ -12,7 +12,7 @@ func usage() {
 	prog := filepath.Base(os.Args[0])
 	out := flag.CommandLine.Output()
 
-	fmt.Fprintf(out, `fpcheck - HTTPS fingerprint checker using surf + uTLS
+	_, _ = fmt.Fprintf(out, `fpcheck - HTTPS fingerprint checker using surf + uTLS
 
 Usage:
   %[1]s [options] https://host[:port]/path [options]
@@ -24,7 +24,7 @@ Options:
 
 	flag.PrintDefaults()
 
-	fmt.Fprintf(out, `
+	_, _ = fmt.Fprintf(out, `
 Examples:
   %[1]s https://example.com/
   %[1]s --fp firefox https://example.com/
@@ -40,6 +40,8 @@ Examples:
   %[1]s -X POST -H "Content-Type: application/json" -d '{"a":1}' https://example.com/api
   %[1]s --data-binary @payload.bin https://example.com/api
   %[1]s -I https://example.com/
+  %[1]s --dump
+  %[1]s --dump --core mihomo --core sing-box --json
 
 Resolve:
   --resolve works like curl --resolve:
@@ -72,4 +74,14 @@ Output:
 
 On errors, fpcheck still prints fingerprint, SNI, dial target, and protocol if known.
 `, prog)
+}
+
+// errf and errln write to stderr. A failed write to stderr cannot be
+// reported anywhere, so the error is dropped on purpose.
+func errf(format string, a ...any) {
+	_, _ = fmt.Fprintf(os.Stderr, format, a...)
+}
+
+func errln(a ...any) {
+	_, _ = fmt.Fprintln(os.Stderr, a...)
 }

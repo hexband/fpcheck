@@ -94,6 +94,17 @@ func main() {
 	useHTTP2 := flag.Bool("http2", true, "offer h2,http/1.1 via ALPN; --http2=false offers only HTTP/1.1 (rewrites the fingerprint's ALPN, so JA3/JA4 change)")
 	requestEnabled := flag.Bool("request", false, "perform real HTTP request through surf instead of TLS-only probe")
 	list := flag.Bool("list", false, "list supported fingerprint names")
+	dump := flag.Bool("dump", false, "print JA3/JA4 of every uTLS fingerprint of xray-core, sing-box and mihomo (offline, no URL)")
+	dumpCore := flag.StringSlice("core", dumpCores, "with --dump: cores to dump (xray, sing-box, mihomo)")
+	dumpALPN := flag.String("alpn", "h2,http/1.1", "with --dump: client ALPN (sing-box writes it into the profile; xray and mihomo profiles keep their own)")
+	dumpSNI := flag.String("sni", "example.com", "with --dump: SNI in the ClientHello (only its presence enters JA4)")
+	dumpRuns := flag.Int("runs", 5, "with --dump: builds per fingerprint, to catch profiles whose JA4 changes")
+	dumpJSON := flag.Bool("json", false, "with --dump: JSON output")
+	dumpPQOnly := flag.Bool("pq-only", false, "with --dump: only fingerprints with an X25519MLKEM768 key share (what REALITY accepts)")
+	dumpProfiles := flag.StringSlice("profiles", nil, "with --dump: only these fingerprints (--fp names), e.g. hellochrome_155,hellofirefox_148,hellosafari_26_3")
+	dumpYAML := flag.Bool("yaml", false, "with --dump: print ja4_allowlist (YAML) for the selected fingerprints")
+	dumpNames := flag.Bool("names", false, "with --dump: print ja4_names (YAML, JA4 -> fingerprint name); implies --all")
+	dumpAll := flag.Bool("all", false, "with --dump: also xray-core's old fingerprints (OtherFingerprints: hellochrome_58 ... hellochrome_120_pq, Golang)")
 	timeout := flag.Duration("timeout", 2*time.Second, "request/probe timeout")
 	method := flag.StringP("method", "X", "", "HTTP request method; enables request mode")
 	head := flag.BoolP("head", "I", false, "perform a HEAD request; enables request mode")
@@ -108,7 +119,7 @@ func main() {
 		if errors.Is(err, flag.ErrHelp) {
 			return // pflag has already printed the usage
 		}
-		fmt.Fprintf(os.Stderr, "fpcheck: %v\nRun 'fpcheck --help' for usage.\n", err)
+		errf("fpcheck: %v\nRun 'fpcheck --help' for usage.\n", err)
 		os.Exit(2)
 	}
 
@@ -124,6 +135,21 @@ func main() {
 		return
 	}
 
+	if *dump {
+		os.Exit(runDump(dumpOptions{
+			Cores:    *dumpCore,
+			SNI:      *dumpSNI,
+			ALPN:     strings.Split(*dumpALPN, ","),
+			Runs:     *dumpRuns,
+			JSON:     *dumpJSON,
+			PQOnly:   *dumpPQOnly,
+			Profiles: *dumpProfiles,
+			YAML:     *dumpYAML,
+			Names:    *dumpNames,
+			All:      *dumpAll || *dumpNames,
+		}))
+	}
+
 	if flag.NArg() != 1 {
 		usage()
 		os.Exit(2)
@@ -131,11 +157,11 @@ func main() {
 
 	impersonationProfile, err := normalizeImpersonationProfile(*impersonate)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		errln(err)
 		os.Exit(2)
 	}
 	if impersonationProfile != "" && specifiedFlags["fp"] {
-		fmt.Fprintln(os.Stderr, "--impersonate cannot be combined with --fp")
+		errln("--impersonate cannot be combined with --fp")
 		os.Exit(2)
 	}
 
@@ -146,15 +172,15 @@ func main() {
 	hasBody := hasData || hasDataBinary
 
 	if hasMethod && requestMethod == "" {
-		fmt.Fprintln(os.Stderr, "-X/--method requires a method")
+		errln("-X/--method requires a method")
 		os.Exit(2)
 	}
 	if *head && hasMethod {
-		fmt.Fprintln(os.Stderr, "-I/--head cannot be combined with -X/--method")
+		errln("-I/--head cannot be combined with -X/--method")
 		os.Exit(2)
 	}
 	if hasData && hasDataBinary {
-		fmt.Fprintln(os.Stderr, "-d/--data cannot be combined with --data-binary")
+		errln("-d/--data cannot be combined with --data-binary")
 		os.Exit(2)
 	}
 
@@ -173,13 +199,13 @@ func main() {
 	if hasDataBinary {
 		if after, ok := strings.CutPrefix(*dataBinary, "@"); ok {
 			if after == "" {
-				fmt.Fprintln(os.Stderr, "--data-binary @ requires a file path")
+				errln("--data-binary @ requires a file path")
 				os.Exit(2)
 			}
 
 			requestBody, err = os.ReadFile(filepath.Clean(after))
 			if err != nil {
-				fmt.Fprintln(os.Stderr, err)
+				errln(err)
 				os.Exit(2)
 			}
 		} else {
@@ -192,16 +218,16 @@ func main() {
 	var maxBytes int64
 	if *stallEnabled {
 		if *requestEnabled || autoRequestEnabled {
-			fmt.Fprintln(os.Stderr, "--stall works only in TLS probe mode; it cannot be combined with --request, --impersonate, -X, -I, -H, -d or --data-binary")
+			errln("--stall works only in TLS probe mode; it cannot be combined with --request, --impersonate, -X, -I, -H, -d or --data-binary")
 			os.Exit(2)
 		}
 		if *stallTimeout <= 0 {
-			fmt.Fprintln(os.Stderr, "--stall-timeout must be positive")
+			errln("--stall-timeout must be positive")
 			os.Exit(2)
 		}
 		maxBytes, err = parseByteSize(*maxBytesValue)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "--max-bytes:", err)
+			errln("--max-bytes:", err)
 			os.Exit(2)
 		}
 	}
@@ -209,11 +235,11 @@ func main() {
 	rawURL := flag.Arg(0)
 	parsedURL, err := url.Parse(rawURL)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		errln(err)
 		os.Exit(2)
 	}
 	if parsedURL.Scheme != "https" {
-		fmt.Fprintln(os.Stderr, "only https:// URLs are supported")
+		errln("only https:// URLs are supported")
 		os.Exit(2)
 	}
 
@@ -225,11 +251,11 @@ func main() {
 
 	resolveHost, resolvePort, resolveIP, hasResolve, err := parseResolve(*resolveValue)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		errln(err)
 		os.Exit(2)
 	}
 	if hasResolve && (resolveHost != urlHost || resolvePort != urlPort) {
-		fmt.Fprintf(os.Stderr, "--resolve %s:%s does not match URL host:port %s:%s\n", resolveHost, resolvePort, urlHost, urlPort)
+		errf("--resolve %s:%s does not match URL host:port %s:%s\n", resolveHost, resolvePort, urlHost, urlPort)
 		os.Exit(2)
 	}
 
@@ -243,9 +269,9 @@ func main() {
 		var ok bool
 		fp, ok = getFingerprint(*fingerprintName)
 		if !ok {
-			fmt.Fprintf(os.Stderr, "unknown fingerprint %q\n\nknown fingerprints:\n", *fingerprintName)
+			errf("unknown fingerprint %q\n\nknown fingerprints:\n", *fingerprintName)
 			for _, name := range listFingerprints() {
-				fmt.Fprintf(os.Stderr, "  %s\n", name)
+				errf("  %s\n", name)
 			}
 			os.Exit(2)
 		}
@@ -268,6 +294,10 @@ func main() {
 	}
 
 	if !*requestEnabled && !autoRequestEnabled {
+		if fp == nil { // --impersonate always selects request mode
+			errln("TLS probe needs a uTLS fingerprint (--fp)")
+			os.Exit(2)
+		}
 		probeCtx, probeCancel := context.WithTimeout(context.Background(), *timeout)
 		var stall *stallConfig
 		if *stallEnabled {
@@ -283,7 +313,7 @@ func main() {
 
 		printRunMeta(probe.NegotiatedProtocol)
 		printTLSProbe(probe)
-		if probe.Stall != nil {
+		if probe.Stall != nil && stall != nil {
 			printStallResult(probe.Stall, stall)
 		} else if stall != nil {
 			fmt.Println()
