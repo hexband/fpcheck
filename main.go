@@ -98,7 +98,7 @@ func main() {
 	dumpCore := flag.StringSlice("core", dumpCores, "with --dump: cores to dump (xray, sing-box, mihomo)")
 	dumpALPN := flag.String("alpn", "h2,http/1.1", "with --dump: client ALPN (sing-box writes it into the profile; xray and mihomo profiles keep their own)")
 	dumpSNI := flag.String("sni", "example.com", "with --dump: SNI in the ClientHello (only its presence enters JA4)")
-	dumpRuns := flag.Int("runs", 5, "with --dump: builds per fingerprint, to catch profiles whose JA4 changes")
+	dumpRuns := flag.Int("runs", 20, "with --dump: builds per fingerprint, to catch profiles whose JA4 changes")
 	dumpJSON := flag.Bool("json", false, "with --dump: JSON output")
 	dumpPQOnly := flag.Bool("pq-only", false, "with --dump: only fingerprints with an X25519MLKEM768 key share (what REALITY accepts)")
 	dumpProfiles := flag.StringSlice("profiles", nil, "with --dump: only these fingerprints (--fp names), e.g. hellochrome_155,hellofirefox_148,hellosafari_26_3")

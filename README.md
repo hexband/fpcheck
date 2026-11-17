@@ -289,7 +289,7 @@ fpcheck --dump --names                          # ja4_names: every known JA4 -> 
   with the core versions.
 - `*` marks the fingerprints a core's `random` setting picks from (once per
   process start).
-- Every fingerprint is built `--runs` times (default 5). A profile whose JA4
+- Every fingerprint is built `--runs` times (default 20). A profile whose JA4
   changes between builds (some profiles have random parts) is shown with its
   number of variants and left out of the allowlist candidates. Randomized
   presets are not dumped: their JA4 is different on every process start.
